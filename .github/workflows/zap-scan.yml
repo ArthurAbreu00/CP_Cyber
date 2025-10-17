@@ -1,1 +1,92 @@
+name: ZAP DAST Scan
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  zap-scan:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_URL: "http://localhost:8080"
+      REPORT_DIR: ${{ github.workspace }}/zap-reports
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 1) Inicie sua aplicação (substitua pelo seu comando)
+      - name: Start local app (example)
+        run: |
+          # Exemplo: inicie a app em background na porta 8080
+          # Substitua por: docker-compose up -d, npm start, python -m http.server 8080, etc.
+          chmod +x ./start-app.sh || true
+          ./start-app.sh &
+          # espere a app ficar disponível
+          for i in {1..30}; do
+            if curl -sSf $TARGET_URL >/dev/null; then
+              echo "App up"
+              break
+            else
+              echo "Waiting for app... ($i)"
+              sleep 2
+            fi
+          done
+
+      - name: Create report dir
+        run: mkdir -p "$REPORT_DIR"
+
+      # 2) Run ZAP baseline scan (Docker) -> generates HTML and JSON
+      - name: Run OWASP ZAP baseline scan
+        run: |
+          docker run --rm --network=host \
+            -v "${REPORT_DIR}":/zap/wrk/:rw \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t "$TARGET_URL" \
+              -r /zap/wrk/zap-report.html \
+              -J /zap/wrk/zap-report.json \
+              -m 2
+
+      # 3) Parse JSON report and fail on High or Critical
+      - name: Analyze ZAP JSON report and fail on High/Critical
+        shell: bash
+        run: |
+          REPORT="${REPORT_DIR}/zap-report.json"
+          if [ ! -f "$REPORT" ]; then
+            echo "ZAP JSON report not found at $REPORT"
+            exit 2
+          fi
+
+          echo "Total alerts per site (counts):"
+          jq '.site[] | {site: .@name, alerts_count: (.alerts | length)}' "$REPORT" || true
+
+          echo "Total alerts (all sites):"
+          TOTAL=$(jq '[.site[].alerts[]] | length' "$REPORT")
+          echo "$TOTAL"
+
+          echo "Counts by risk:"
+          jq '[.site[].alerts[] | .risk] | group_by(.) | map({risk: .[0], count: length})' "$REPORT" -c
+
+          # Count High or Critical
+          HIGH=$(jq '[.site[].alerts[] | select(.risk=="High")] | length' "$REPORT")
+          CRITICAL=$(jq '[.site[].alerts[] | select(.risk=="Critical")] | length' "$REPORT")
+          echo "High: $HIGH   Critical: $CRITICAL"
+
+          if [ "$HIGH" -gt 0 ] || [ "$CRITICAL" -gt 0 ]; then
+            echo "::error::Found $HIGH High and $CRITICAL Critical vulnerabilities. Failing the job."
+            exit 1
+          else
+            echo "No High/Critical alerts — continuing."
+          fi
+
+      # 4) Upload reports as artifacts
+      - name: Upload ZAP reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-scan-report
+          path: |
+            ${{ github.workspace }}/zap-reports/zap-report.html
+            ${{ github.workspace }}/zap-reports/zap-report.json
 
