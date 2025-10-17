@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Bem-vindo - ClickSeguro</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body>
+  <h2>Resultado do Login</h2>
+
+  <!-- Vulnerabilidade proposital: inserimos o username sem escape -->
+  <p>Olá, {{ username | safe }}!</p>
+
+  <p>Login simulado — sem validação real.</p>
+  <p><a href="/login">Voltar ao login</a></p>
+</body>
+</html>
